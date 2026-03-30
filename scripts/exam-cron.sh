@@ -3,12 +3,19 @@
 set -euo pipefail
 source /Users/mac/.openclaw/workspace/.env
 
-VAULT="0xE39F5eDe7DCBA65C0C77278D782aEb544201845e"
+VAULT="0x8A9624fd8a55a4881c26B80801eDCE41C85DE79B"
 RPC="https://bsc-dataseed.binance.org"
 CAST="ALL_PROXY= cast"
 
-call() { eval "$CAST call $VAULT \"$1\" --rpc-url $RPC"; }
+call() { eval "$CAST call $VAULT \"$1\" --rpc-url $RPC ${2:-}"; }
 send() { eval "$CAST send $VAULT \"$1\" --rpc-url $RPC --private-key $PRIVATE_KEY --legacy ${2:-}"; }
+
+# Decode getRound: returns raw hex then abi-decode to handle fixed arrays
+decode_round() {
+  local raw
+  raw=$(call "getRound(uint256)" "$1")
+  eval "$CAST abi-decode 'f()(uint256,uint256,uint256,uint256,uint8,bool,address[3],uint256[3])' $raw"
+}
 
 ROUND=$(call "currentRound()(uint256)")
 echo "Current round: $ROUND"
@@ -20,8 +27,8 @@ if [ "$ROUND" = "0" ]; then
   exit 0
 fi
 
-# 获取当前轮次 phase: 0=NONE 1=QUESTION 2=ANSWERING 3=SCORING 4=DONE
-PHASE=$(call "getRound(uint256)(uint256,uint256,uint256,uint256,uint8,bool,address[3],uint256[3])" "$ROUND" | sed -n '5p' | tr -d ' ')
+ROUND_DATA=$(decode_round "$ROUND")
+PHASE=$(echo "$ROUND_DATA" | sed -n '5p' | tr -d ' ')
 echo "Round $ROUND phase: $PHASE"
 
 case "$PHASE" in
@@ -31,7 +38,7 @@ case "$PHASE" in
     echo "New exam started! Round $((ROUND + 1))"
     ;;
   2) # ANSWERING — 答题中，检查是否超时需要关闭
-    START_TIME=$(call "getRound(uint256)(uint256,uint256,uint256,uint256,uint8,bool,address[3],uint256[3])" "$ROUND" | sed -n '2p' | tr -d ' ')
+    START_TIME=$(echo "$ROUND_DATA" | sed -n '3p' | awk '{print $1}')
     WINDOW=$(call "answerWindow()(uint256)")
     NOW=$(date +%s)
     DEADLINE=$((START_TIME + WINDOW))
